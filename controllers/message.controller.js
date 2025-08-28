@@ -4,7 +4,7 @@ import Conversation from "../models/conversation.model.js";
 
 export const sendMessage = async (req, res) => {
   try {
-    const senderId = new userId; 
+    const senderId = req.userId;
     const receiverId = req.params.receiverId;
 
     const { message } = req.body;
@@ -51,15 +51,24 @@ export const getAllMessages = async (req, res) => {
 
     const conversation = await Conversation.findOne({
       participants: { $all: [senderId, receiverId] },
-    }).populate("messages");
+    })
+      .populate({
+        path: "messages",
+        populate: { path: "sender", select: "userName profileImage name" },
+      })
+      .populate("participants", "userName profileImage name");
 
-    return res.status(200).json(conversation?.messages || []);
+    return res.status(200).json({
+      messages: conversation?.messages || [],
+      participants: conversation?.participants || [],
+    });
   } catch (error) {
     return res
       .status(500)
       .json({ message: `get message error: ${error.message}` });
   }
 };
+
 
 export const getPreviousChats = async (req, res) => {
   try {
@@ -69,7 +78,9 @@ export const getPreviousChats = async (req, res) => {
       participants: currentUserId,
     })
       .populate("participants")
-      .sort({ updatedAt: -1 });
+      .populate({ path: "messages", populate: { path: "sender", select: "userName profileImage" } })
+      .sort({ updatedAt: -1 })
+      .lean();
 
     // collect all users I have chatted with
     const userMap = {};
