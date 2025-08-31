@@ -9,10 +9,11 @@ import postRouters from "./routes/post.routes.js"
 import loopRouters from "./routes/loop.routes.js"
 import storyRouters from "./routes/story.routes.js"
 import messageRouter from "./routes/message.routes.js"
+import { app, server } from "./socket.js"
 
 dotenv.config();
 
-const app = express()
+
 const port = process.env.PORT || 5000
 
 app.use(cors({
@@ -29,7 +30,7 @@ app.use("/api/loop",loopRouters)
 app.use("/api/story",storyRouters)
 app.use("/api/message",messageRouter)
 
-app.listen(port,()=>{
+server.listen(port,()=>{
     connectDb()
     console.log(`server listning at  at ${port}`) ;
 })

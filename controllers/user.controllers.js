@@ -16,7 +16,6 @@ import uploadOnCloudinary from "../config/cloudinary.js";
 //   }
 // };
 
-
 // controllers/user.controller.js
 export const getCurrentUser = async (req, res) => {
   try {
@@ -39,12 +38,12 @@ export const getCurrentUser = async (req, res) => {
           ],
         },
         {
-      path: "story",   
-      populate: [
-        { path: "author", select: "name userName profileImage" },
-        { path: "viewers", select: "name userName profileImage" }, // if you track viewers
-      ],
-    },
+          path: "story",
+          populate: [
+            { path: "author", select: "name userName profileImage" },
+            { path: "viewers", select: "name userName profileImage" }, // if you track viewers
+          ],
+        },
         { path: "followers", select: "name userName profileImage" },
         { path: "following", select: "name userName profileImage" },
       ]);
@@ -52,17 +51,22 @@ export const getCurrentUser = async (req, res) => {
     if (!user) return res.status(400).json({ message: "User not found" });
     return res.status(200).json(user);
   } catch (error) {
-    return res.status(500).json({ message: `Get current user error: ${error.message}` });
+    return res
+      .status(500)
+      .json({ message: `Get current user error: ${error.message}` });
   }
 };
 
-
 export const suggestedUser = async (req, res) => {
   try {
-    const users = await User.find({ _id: { $ne: req.userId } }).select("-password");
+    const users = await User.find({ _id: { $ne: req.userId } }).select(
+      "-password"
+    );
     return res.status(200).json(users);
   } catch (error) {
-    return res.status(500).json({ message: `Get suggested user error: ${error}` });
+    return res
+      .status(500)
+      .json({ message: `Get suggested user error: ${error}` });
   }
 };
 
@@ -76,9 +80,14 @@ export const editProfile = async (req, res) => {
     }
 
     // Check for existing username (not belonging to current user)
-    const sameUserWithUserName = await User.findOne({ userName }).select("-password");
-    if (sameUserWithUserName && sameUserWithUserName._id.toString() !== req.userId) {
-      return res.status(400).json({ message: `User already exists: ${error}` });
+    const sameUserWithUserName = await User.findOne({ userName }).select(
+      "-password"
+    );
+    if (
+      sameUserWithUserName &&
+      sameUserWithUserName._id.toString() !== req.userId
+    ) {
+      return res.status(400).json({ message: "Username already taken" });
     }
 
     let profileImage;
@@ -97,31 +106,39 @@ export const editProfile = async (req, res) => {
 
     await user.save();
     return res.status(200).json(user);
-
   } catch (error) {
     console.error("Edit profile error:", error);
     return res.status(500).json({ message: `Edit profile error: ${error}` });
   }
 };
 
-
 export const getProfile = async (req, res) => {
   try {
     const userName = req.params.userName;
-    const user = await User.findOne({ userName }).select("-password")
-    .populate("posts loops followers following")
-    
+    const user = await User.findOne({ userName })
+      .select("-password")
+      .populate([
+        {
+          path: "posts",
+          populate: [
+            { path: "author", select: "name userName profileImage" },
+            { path: "comments.author", select: "name userName profileImage" },
+          ],
+        },
+        { path: "followers", select: "name userName profileImage" },
+        { path: "following", select: "name userName profileImage" },
+      ]);
+
     if (!user) {
       return res.status(400).json({ message: "User not found" });
     }
-    
+
     return res.status(200).json(user);
   } catch (error) {
     console.error("Get profile error:", error);
     return res.status(500).json({ message: `Get profile error: ${error}` });
   }
 };
-
 
 export const follow = async (req, res) => {
   try {
@@ -148,10 +165,10 @@ export const follow = async (req, res) => {
     if (isFollowing) {
       // Unfollow
       currentUser.following = currentUser.following.filter(
-        id => id.toString() !== targetUserId
+        (id) => id.toString() !== targetUserId
       );
       targetUser.followers = targetUser.followers.filter(
-        id => id.toString() !== currentUserId
+        (id) => id.toString() !== currentUserId
       );
 
       await currentUser.save();
@@ -159,7 +176,7 @@ export const follow = async (req, res) => {
 
       return res.status(200).json({
         following: false,
-        message: "Unfollowed successfully"
+        message: "Unfollowed successfully",
       });
     } else {
       // Follow
@@ -171,10 +188,21 @@ export const follow = async (req, res) => {
 
       return res.status(200).json({
         following: true,
-        message: "Followed successfully"
+        message: "Followed successfully",
       });
     }
   } catch (error) {
     return res.status(500).json({ message: `Follow error: ${error.message}` });
+  }
+};
+
+export const followingList = async (req, res) => {
+  try {
+    const result = await User.findById(req.userId) 
+
+    return res.status(200).json(result?.following);
+  } catch (error) {
+    console.error("Following list error:", error);
+    return res.status(500).json({ message: `Following list error: ${error.message}` });
   }
 };
