@@ -206,3 +206,43 @@ export const followingList = async (req, res) => {
     return res.status(500).json({ message: `Following list error: ${error.message}` });
   }
 };
+
+// fuzzy search from mongo ab atlus 
+
+export const search = async (req, res) => {
+  try {
+    const keyWord = req.query.keyWord;
+
+    if (!keyWord) {
+      return res.status(400).json({ message: "Keyword is required" });
+    }
+
+    const users = await User.aggregate([
+      {
+        $search: {
+          index: "userSearchIndex", // your index name
+          text: {
+            query: keyWord,
+            path: ["userName", "name"], // search in both fields
+            fuzzy: { maxEdits: 1 } // allows small typos
+          }
+        }
+      },
+      {
+        $project: {
+          userName: 1,
+          name: 1,
+          profileImage: 1,
+          followersCount: { $size: "$followers" },
+          followingCount: { $size: "$following" }
+        }
+      },
+      { $limit: 10 } // limit results
+    ]);
+
+    return res.status(200).json(users);
+  } catch (error) {
+    console.error("Search error:", error);
+    return res.status(500).json({ message: "Internal Server Error" });
+  }
+};
