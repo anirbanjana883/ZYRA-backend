@@ -1,7 +1,8 @@
 import Loop from "../models/loop.model.js";
 import uploadOnCloudinary from "../config/cloudinary.js";
 import User from "../models/user.model.js";
-import { io } from "../socket.js";
+import Notification from "../models/notification.model.js";
+import { getSocketId, io } from "../socket.js";
 
 
 // upload loop Controller
@@ -11,7 +12,7 @@ export const uploadLoop = async (req, res) => {
 
     let media;
     if (req.file) {
-      media = await uploadOnCloudinary(req.file.path); 
+      media = await uploadOnCloudinary(req.file.path);
     } else {
       return res.status(400).json({ error: "No file uploaded" });
     }
@@ -38,12 +39,13 @@ export const uploadLoop = async (req, res) => {
   }
 };
 
-// Get All loop for Logged In User
+// Get All loop
 export const getAllLoops = async (req, res) => {
   try {
     const loops = await Loop.find({})
-      .populate("author", "name userName profileImage")
-      .populate("comments.author")
+      .populate("author", "name userName profileImage") // loop author
+      .populate("comments.author", "name userName profileImage") // comment authors
+      .populate("comments.replies.author", "name userName profileImage") // reply authors
       .sort({ createdAt: -1 });
 
     return res.status(200).json(loops);
@@ -55,17 +57,24 @@ export const getAllLoops = async (req, res) => {
   }
 };
 
-// like unlike loop
+// like/unlike loop with notifications (robust)
 export const like = async (req, res) => {
   try {
     const loopId = req.params.loopId;
-    const loop = await Loop.findById(loopId);
+    const userId = req.userId?.toString();
+
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized: user not found" });
+    }
+
+    const loop = await Loop.findById(loopId).populate(
+      "author",
+      "name userName profileImage"
+    );
 
     if (!loop) {
       return res.status(404).json({ message: "Loop not found" });
     }
-
-    const userId = req.userId.toString();
 
     const alreadyLiked = loop.likes.some((id) => id.toString() === userId);
 
@@ -73,16 +82,57 @@ export const like = async (req, res) => {
       loop.likes = loop.likes.filter((id) => id.toString() !== userId);
     } else {
       loop.likes.push(userId);
+
+      // send notification if not self-like
+      if (loop.author?._id.toString() !== userId) {
+        try {
+          const existingNotification = await Notification.findOne({
+            sender: userId,
+            receiver: loop.author._id,
+            type: "like",
+            loop: loop._id,
+          });
+
+          if (!existingNotification) {
+            const notification = await Notification.create({
+              sender: userId,
+              receiver: loop.author._id,
+              type: "like",
+              loop: loop._id,
+              message: "liked your loop",
+            });
+
+            const populatedNotification = await Notification.findById(
+              notification._id
+            )
+              .populate("sender", "name userName profileImage")
+              .populate("receiver", "name userName profileImage")
+              .populate("loop", "caption media");
+
+            const receiverSocketId = getSocketId(loop.author._id.toString());
+            if (receiverSocketId) {
+              io.to(receiverSocketId).emit(
+                "newNotification",
+                populatedNotification
+              );
+            }
+          }
+        } catch (notifErr) {
+          console.error("Notification error:", notifErr);
+        }
+      }
     }
 
     await loop.save();
 
-    await loop.populate("author", "name userName profileImage");
+    // populate comments for frontend if needed
+    await loop.populate("comments.author", "name userName profileImage");
 
-    io.emit("likedLoop",{
-      loopId:loop._id,
-      likes:loop.likes
-    })
+    // emit like update to all sockets
+    io.emit("likedLoop", {
+      loopId: loop._id,
+      likes: loop.likes,
+    });
 
     return res.status(200).json(loop);
   } catch (error) {
@@ -93,31 +143,62 @@ export const like = async (req, res) => {
   }
 };
 
-// comment on loop
+// comment on loop (with notification)
 export const comment = async (req, res) => {
   try {
     const { message } = req.body;
     const loopId = req.params.loopId;
 
-    const loop = await Loop.findById(loopId);
+    if (!message) {
+      return res.status(400).json({ message: "Comment message is required" });
+    }
 
+    const loop = await Loop.findById(loopId).populate("author");
     if (!loop) {
       return res.status(404).json({ message: "Loop not found" });
     }
 
+    if (!message || !message.trim()) {
+      return res.status(400).json({ message: "Comment cannot be empty" });
+    }
+
     loop.comments.push({
       author: req.userId,
-      message,
+      message: message.trim(),
     });
 
-    await loop.save();
+    // notify only if not self-comment
+    if (loop.author._id.toString() !== req.userId.toString()) {
+      const notification = await Notification.create({
+        sender: req.userId,
+        receiver: loop.author._id,
+        type: "comment",
+        loop: loop._id,
+        message: "commented on your loop",
+      });
 
+      const populatedNotification = await Notification.findById(
+        notification._id
+      )
+        .populate("sender", "name userName profileImage")
+        .populate("receiver", "name userName profileImage")
+        .populate("loop", "caption media");
+
+      const receiverSocketId = getSocketId(loop.author._id.toString());
+
+      if (receiverSocketId) {
+        io.to(receiverSocketId).emit("newNotification", populatedNotification);
+      }
+    }
+
+    await loop.save();
     await loop.populate("author", "name userName profileImage");
     await loop.populate("comments.author", "name userName profileImage");
-    io.emit("commentedLoop",{
-      loopId:loop._id,
-      comments:loop.comments
-    })
+
+    io.emit("commentedLoop", {
+      loopId: loop._id,
+      comments: loop.comments,
+    });
 
     return res.status(200).json(loop);
   } catch (error) {
@@ -125,5 +206,139 @@ export const comment = async (req, res) => {
     return res
       .status(500)
       .json({ message: `Comment in loop error: ${error.message}` });
+  }
+};
+
+// Reply to Comment
+export const replyToComment = async (req, res) => {
+  try {
+    const { loopId, commentId } = req.params;
+    let { message } = req.body;
+
+    // Validate message
+    if (!message || !message.trim()) {
+      return res.status(400).json({ message: "Reply message cannot be empty" });
+    }
+    message = message.trim();
+
+    // Find the loop
+    const loop = await Loop.findById(loopId).populate("author");
+    if (!loop) return res.status(404).json({ message: "Loop not found" });
+
+    // Find the comment
+    const comment = loop.comments.id(commentId);
+    if (!comment) return res.status(404).json({ message: "Comment not found" });
+
+    // Add reply
+    comment.replies.push({ author: req.userId, message });
+
+    // Send notification if not self-reply
+    if (loop.author._id.toString() !== req.userId.toString()) {
+      const notification = await Notification.create({
+        sender: req.userId,
+        receiver: loop.author._id,
+        type: "reply",
+        loop: loop._id,
+        message: "replied to a comment in your loop",
+      });
+
+      const populatedNotification = await Notification.findById(notification._id)
+        .populate("sender", "name userName profileImage")
+        .populate("receiver", "name userName profileImage")
+        .populate("loop", "caption media");
+
+      const receiverSocketId = getSocketId(loop.author._id.toString());
+      if (receiverSocketId) {
+        io.to(receiverSocketId).emit("newNotification", populatedNotification);
+      }
+    }
+
+    // Save loop and populate authors
+    await loop.save();
+    await loop.populate("comments.author", "name userName profileImage");
+    await loop.populate("comments.replies.author", "name userName profileImage");
+
+    // Emit reply update via socket
+    io.emit("repliedLoop", {
+      loopId: loop._id,
+      commentId,
+      replies: comment.replies,
+    });
+
+    return res.status(200).json(loop);
+  } catch (error) {
+    console.error("Reply in loop error:", error);
+    return res.status(500).json({ message: `Reply in loop error: ${error.message}` });
+  }
+};
+
+
+// Delete Comment
+export const deleteComment = async (req, res) => {
+  try {
+    const { loopId, commentId } = req.params;
+
+    const loop = await Loop.findById(loopId);
+    if (!loop) return res.status(404).json({ message: "Loop not found" });
+
+    const comment = loop.comments.id(commentId);
+    if (!comment) return res.status(404).json({ message: "Comment not found" });
+
+    // only author of comment or loop author can delete
+    if (
+      comment.author.toString() !== req.userId.toString() &&
+      loop.author.toString() !== req.userId.toString()
+    ) {
+      return res.status(403).json({ message: "Not authorized" });
+    }
+
+    comment.deleteOne();
+    await loop.save();
+    await loop.populate("comments.author", "name userName profileImage");
+    await loop.populate("comments.replies.author", "name userName profileImage");
+
+
+    io.emit("deletedLoopComment", { loopId: loop._id, commentId });
+
+    return res.status(200).json({ message: "Comment deleted", loop });
+  } catch (error) {
+    console.error("Delete comment error:", error);
+    res.status(500).json({ message: `Delete comment error: ${error.message}` });
+  }
+};
+
+// Delete Reply
+export const deleteReply = async (req, res) => {
+  try {
+    const { loopId, commentId, replyId } = req.params;
+
+    const loop = await Loop.findById(loopId);
+    if (!loop) return res.status(404).json({ message: "Loop not found" });
+
+    const comment = loop.comments.id(commentId);
+    if (!comment) return res.status(404).json({ message: "Comment not found" });
+
+    const reply = comment.replies.id(replyId);
+    if (!reply) return res.status(404).json({ message: "Reply not found" });
+
+    // only author of reply or loop author can delete
+    if (
+      reply.author.toString() !== req.userId.toString() &&
+      loop.author.toString() !== req.userId.toString()
+    ) {
+      return res.status(403).json({ message: "Not authorized" });
+    }
+
+    reply.deleteOne();
+    await loop.save();
+    await loop.populate("comments.author", "name userName profileImage");
+    await loop.populate("comments.replies.author", "name userName profileImage");
+
+    io.emit("deletedLoopReply", { loopId: loop._id, commentId, replyId });
+
+    return res.status(200).json({ message: "Reply deleted", loop });
+  } catch (error) {
+    console.error("Delete reply error:", error);
+    res.status(500).json({ message: `Delete reply error: ${error.message}` });
   }
 };

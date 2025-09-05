@@ -1,22 +1,9 @@
 import User from "../models/user.model.js";
 import uploadOnCloudinary from "../config/cloudinary.js";
+import Notification from "../models/notification.model.js";
+import { io } from "../socket.js";
 
-// export const getCurrentUser = async (req, res) => {
-//   try {
-//     const userId = req.userId;
-//     const user = await User.findById(userId)
-//     .populate("posts loops posts.author posts.comments saved saved.author")
-//     .select("-password");
-//     if (!user) {
-//       return res.status(400).json({ message: "User not found" });
-//     }
-//     return res.status(200).json(user);
-//   } catch (error) {
-//     return res.status(500).json({ message: `Get current user error: ${error}` });
-//   }
-// };
 
-// controllers/user.controller.js
 export const getCurrentUser = async (req, res) => {
   try {
     const userId = req.userId;
@@ -140,6 +127,8 @@ export const getProfile = async (req, res) => {
   }
 };
 
+
+
 export const follow = async (req, res) => {
   try {
     const currentUserId = req.userId;
@@ -163,7 +152,7 @@ export const follow = async (req, res) => {
     const isFollowing = currentUser.following.includes(targetUserId);
 
     if (isFollowing) {
-      // Unfollow
+      // 🔹 Unfollow
       currentUser.following = currentUser.following.filter(
         (id) => id.toString() !== targetUserId
       );
@@ -179,12 +168,28 @@ export const follow = async (req, res) => {
         message: "Unfollowed successfully",
       });
     } else {
-      // Follow
+      //  Follow
       currentUser.following.push(targetUserId);
       targetUser.followers.push(currentUserId);
 
       await currentUser.save();
       await targetUser.save();
+
+      // Create notification (only if not following yourself)
+      if (currentUserId !== targetUserId) {
+        const notification = await Notification.create({
+          sender: currentUser._id,
+          receiver: targetUser._id,
+          type: "follow",
+          message: `${currentUser.name} started following you.`,
+        });
+
+        const populatedNotification = await Notification.findById(notification._id)
+          .populate("sender", "name userName profileImage")
+          .populate("receiver", "name userName profileImage");
+
+        io.to(targetUserId.toString()).emit("newNotification", populatedNotification);
+      }
 
       return res.status(200).json({
         following: true,
@@ -195,6 +200,7 @@ export const follow = async (req, res) => {
     return res.status(500).json({ message: `Follow error: ${error.message}` });
   }
 };
+
 
 export const followingList = async (req, res) => {
   try {
@@ -244,5 +250,49 @@ export const search = async (req, res) => {
   } catch (error) {
     console.error("Search error:", error);
     return res.status(500).json({ message: "Internal Server Error" });
+  }
+};
+
+
+
+export const getAllNotifications = async (req, res) => {
+  try {
+    const notifications = await Notification.find({
+      receiver: req.userId
+    })
+      .populate("sender", "name userName profileImage")
+      .populate("receiver", "name userName profileImage")
+      .populate("post")
+      .populate("loop")
+      .sort({ createdAt: -1 }); 
+
+    return res.status(200).json(notifications);
+  } catch (error) {
+    return res.status(500).json({ message: "Notification Error" });
+  }
+};
+
+
+
+export const markAsRead = async (req, res) => {
+  try {
+    const notificationId = req.params.notificationId;
+
+    const notification = await Notification.findById(notificationId);
+    if (!notification) {
+      return res.status(404).json({ message: "Notification not found" });
+    }
+
+    // Security: ensure only the receiver can mark as read
+    if (notification.receiver.toString() !== req.userId) {
+      return res.status(403).json({ message: "Not authorized" });
+    }
+
+    notification.isRead = true;
+    await notification.save(); 
+
+    return res.status(200).json({ message: "Marked as read" });
+  } catch (error) {
+    return res.status(500).json({ message: "Read notification error" });
   }
 };

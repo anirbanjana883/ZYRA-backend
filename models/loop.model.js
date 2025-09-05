@@ -1,4 +1,6 @@
+
 import mongoose from "mongoose";
+import commentSchema from "./comment.model.js"; 
 
 const loopSchema = new mongoose.Schema(
   {
@@ -20,21 +22,10 @@ const loopSchema = new mongoose.Schema(
         ref: "User",
       },
     ],
-    comments: [
-      {
-        author: {
-          type: mongoose.Schema.Types.ObjectId,
-          ref: "User",
-        },
-        message: {
-          type: String,
-        },
-      },
-    ],
+    comments: [commentSchema], 
   },
   { timestamps: true }
 );
-
 
 const Loop = mongoose.models.Loop || mongoose.model("Loop", loopSchema);
 
