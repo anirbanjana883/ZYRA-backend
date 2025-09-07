@@ -2,9 +2,11 @@ import express from "express"
 import isAuth from "../middlewares/isAuth.js"
 
 import {upload} from "../middlewares/multer.js"
-import { comment, getAllLoops, like, uploadLoop ,replyToComment,
+import { 
+  comment, getAllLoops, like, uploadLoop ,replyToComment,
   deleteComment,
-  deleteReply} from "../controllers/loop.controllers.js"
+  deleteReply,
+  deleteLoop} from "../controllers/loop.controllers.js"
 
 const loopRouter = express.Router()
 
@@ -15,5 +17,6 @@ loopRouter.post("/comment/:loopId",isAuth,comment)
 loopRouter.post("/reply/:loopId/:commentId", isAuth, replyToComment);
 loopRouter.delete("/comment/:loopId/:commentId", isAuth, deleteComment);
 loopRouter.delete("/reply/:loopId/:commentId/:replyId", isAuth, deleteReply);
+loopRouter.delete("/delete/:loopId", isAuth, deleteLoop);
 
 export default loopRouter

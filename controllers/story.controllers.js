@@ -132,3 +132,35 @@ export const getAllStories = async (req, res) => {
       .json({ message: `Error fetching all stories: ${error.message}` });
   }
 };
+
+// Delete Story
+export const deleteStory = async (req, res) => {
+  try {
+    const storyId = req.params.storyId;
+    const story = await Story.findById(storyId);
+
+    if (!story) {
+      return res.status(404).json({ message: "Story not found" });
+    }
+
+    // only author can delete
+    if (story.author.toString() !== req.userId.toString()) {
+      return res.status(403).json({ message: "Not authorized to delete this story" });
+    }
+
+    await Story.findByIdAndDelete(storyId);
+
+    // remove reference from user
+    const user = await User.findById(req.userId);
+    if (user && user.story?.toString() === storyId.toString()) {
+      user.story = null;
+      await user.save();
+    }
+
+    return res.status(200).json({ message: "Story deleted successfully", storyId });
+  } catch (error) {
+    return res
+      .status(500)
+      .json({ message: `Error deleting story: ${error.message}` });
+  }
+};

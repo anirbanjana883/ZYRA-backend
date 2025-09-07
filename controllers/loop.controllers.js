@@ -342,3 +342,37 @@ export const deleteReply = async (req, res) => {
     res.status(500).json({ message: `Delete reply error: ${error.message}` });
   }
 };
+
+// Delete Loop
+export const deleteLoop = async (req, res) => {
+  try {
+    const { loopId } = req.params;
+    const loop = await Loop.findById(loopId);
+
+    if (!loop) return res.status(404).json({ message: "Loop not found" });
+
+    // Only author can delete
+    if (loop.author.toString() !== req.userId) {
+      return res.status(403).json({ message: "Unauthorized" });
+    }
+
+    // Remove loop from user's loops
+    await User.findByIdAndUpdate(loop.author, {
+      $pull: { loops: loop._id },
+    });
+
+    // Delete notifications related to this loop
+    await Notification.deleteMany({ loop: loop._id });
+
+    // Delete loop
+    await loop.deleteOne();
+
+    // Emit socket event
+    io.emit("deletedLoop", { loopId: loop._id });
+
+    res.status(200).json({ message: "Loop deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting loop:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+};

@@ -355,3 +355,29 @@ export const deleteReply = async (req, res) => {
     res.status(500).json({ message: `Delete reply error: ${error.message}` });
   }
 };
+
+//  Delete Post
+export const deletePost = async (req, res) => {
+  try {
+    const { postId } = req.params;
+
+    const post = await Post.findById(postId);
+    if (!post) return res.status(404).json({ message: "Post not found" });
+
+    // Only the author can delete their post
+    if (post.author.toString() !== req.userId.toString()) {
+      return res.status(403).json({ message: "Not authorized" });
+    }
+
+    // Delete the post
+    await post.deleteOne();
+
+    // Emit socket event for real-time update
+    io.emit("deletedPost", { postId });
+
+    res.status(200).json({ message: "Post deleted successfully", postId });
+  } catch (error) {
+    console.error("Delete post error:", error);
+    res.status(500).json({ message: `Delete post error: ${error.message}` });
+  }
+};
