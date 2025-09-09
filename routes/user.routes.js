@@ -1,6 +1,6 @@
 import express from "express"
 import isAuth from "../middlewares/isAuth.js"
-import { editProfile, follow, followingList, getAllNotifications, getCurrentUser, getProfile, markAsRead, search, suggestedUser } from "../controllers/user.controllers.js"
+import { editProfile, follow, followingList, getAllNotifications, getCurrentUser, getLastSeen, getProfile, markAsRead, search, suggestedUser } from "../controllers/user.controllers.js"
 import {upload} from "../middlewares/multer.js"
 const userRouter = express.Router()
 
@@ -13,5 +13,6 @@ userRouter.get("/followingList",isAuth,followingList)
 userRouter.get("/search",isAuth,search)
 userRouter.get("/getAllNotifications",isAuth,getAllNotifications)
 userRouter.get("/markAsRead/:notificationId",isAuth,markAsRead)
+userRouter.get("/lastSeen/:userId", isAuth, getLastSeen);
 
 export default userRouter

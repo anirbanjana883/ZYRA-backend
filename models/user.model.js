@@ -76,7 +76,10 @@ const userSchema = new mongoose.Schema({
   isOtpVerified: {
     type: Boolean,
     default: false
-  }
+  },
+  isOnline: { type: Boolean, default: false }, // true if user is online
+  lastSeen: { type: Date, default: Date.now }, // last active timestamp
+  
 }, { timestamps: true }); 
 
 const User = mongoose.model("User", userSchema);

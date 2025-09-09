@@ -1,7 +1,8 @@
 import User from "../models/user.model.js";
 import uploadOnCloudinary from "../config/cloudinary.js";
 import Notification from "../models/notification.model.js";
-import { io } from "../socket.js";
+import { getSocket } from "../socket.js";
+
 
 
 export const getCurrentUser = async (req, res) => {
@@ -296,3 +297,20 @@ export const markAsRead = async (req, res) => {
     return res.status(500).json({ message: "Read notification error" });
   }
 };
+
+
+export const getLastSeen = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const user = await User.findById(userId).select("isOnline lastSeen");
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    res.status(200).json({
+      isOnline: user.isOnline,
+      lastSeen: user.lastSeen,
+    });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ message: "Server error" });
+  }
+}

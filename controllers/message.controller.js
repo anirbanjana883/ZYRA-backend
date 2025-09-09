@@ -1,19 +1,20 @@
 import uploadOnCloudinary from "../config/cloudinary.js";
 import Message from "../models/message.model.js";
 import Conversation from "../models/conversation.model.js";
-import {io, getSocketId } from "../socket.js";
+import { getSocketId, getSocket } from "../socket.js";
 
 
 export const sendMessage = async (req, res) => {
+  const io = getSocket();
   try {
     const senderId = req.userId;
     const receiverId = req.params.receiverId;
-
     const { message } = req.body;
     let image;
 
     if (req.file) {
-      image = await uploadOnCloudinary(req.file.path);
+      const uploaded = await uploadOnCloudinary(req.file.path);
+      image = uploaded.secure_url || uploaded.url || uploaded; // ensure it's a URL
     }
 
     // create new message
@@ -22,6 +23,7 @@ export const sendMessage = async (req, res) => {
       receiver: receiverId,
       message,
       image,
+      status: "sent",
     });
 
     // find existing conversation
@@ -29,7 +31,6 @@ export const sendMessage = async (req, res) => {
       participants: { $all: [senderId, receiverId] },
     });
 
-    // if no conversation found, create new
     if (!conversation) {
       conversation = await Conversation.create({
         participants: [senderId, receiverId],
@@ -40,17 +41,38 @@ export const sendMessage = async (req, res) => {
       await conversation.save();
     }
 
-    const receiverSocketId = getSocketId(receiverId)
-    if(receiverSocketId){
-      io.to(receiverSocketId).emit("newMessage",newMessage)
+    // emit message to sender
+    const senderSocketId = getSocketId(senderId);
+    if (senderSocketId) {
+      io.to(senderSocketId).emit("messageSent", newMessage);
     }
-    
+
+    // emit message to receiver if online
+    const receiverSocketId = getSocketId(receiverId);
+    if (receiverSocketId) {
+      io.to(receiverSocketId).emit("receiveMessage", newMessage);
+
+      // mark as delivered
+      await Message.findByIdAndUpdate(newMessage._id, { status: "delivered" });
+      io.to(receiverSocketId).emit("messageStatusUpdate", {
+        messageId: newMessage._id,
+        status: "delivered",
+      });
+
+      io.to(receiverSocketId).emit("updatePrevChatUser", {
+        userId: senderId,
+        lastMessage: message,
+        lastMessageTime: new Date(),
+      });
+    }
 
     return res.status(200).json(newMessage);
   } catch (error) {
-    return res.status(500).json({ message: `send message error: ${error}` });
+    console.error(error);
+    return res.status(500).json({ message: `send message error: ${error.message}` });
   }
 };
+
 
 export const getAllMessages = async (req, res) => {
   try {
@@ -86,7 +108,7 @@ export const getPreviousChats = async (req, res) => {
       participants: currentUserId,
     })
       .populate("participants")
-      .populate({ path: "messages", populate: { path: "sender", select: "userName profileImage" } })
+      .populate({ path: "messages", populate: { path: "sender", select: "userName profileImage name isOnline lastSeen" } })
       .sort({ updatedAt: -1 })
       .lean();
 
