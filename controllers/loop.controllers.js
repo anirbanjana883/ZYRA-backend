@@ -4,7 +4,6 @@ import User from "../models/user.model.js";
 import Notification from "../models/notification.model.js";
 import { getSocketId, io } from "../socket.js";
 
-
 // upload loop Controller
 export const uploadLoop = async (req, res) => {
   try {
@@ -31,6 +30,29 @@ export const uploadLoop = async (req, res) => {
       "author",
       "name userName profileImage"
     );
+
+    //  (Realtime notification to followers on upload)
+    const followers = await User.find({ following: req.userId }).select("_id");
+    for (let follower of followers) {
+      const notification = await Notification.create({
+        sender: req.userId,
+        receiver: follower._id,
+        type: "upload",
+        loop: loop._id,
+        message: "uploaded a new loop",
+      });
+
+      const populatedNotification = await Notification.findById(notification._id)
+        .populate("sender", "name userName profileImage")
+        .populate("receiver", "name userName profileImage")
+        .populate("loop", "caption media");
+
+      const receiverSocketId = getSocketId(follower._id.toString());
+      if (receiverSocketId) {
+        io.to(receiverSocketId).emit("newNotification", populatedNotification);
+      }
+    }
+    // 
 
     return res.status(201).json(populatedLoop);
   } catch (err) {
@@ -83,7 +105,7 @@ export const like = async (req, res) => {
     } else {
       loop.likes.push(userId);
 
-      // send notification if not self-like
+      // ✅ CHANGE START (Realtime notification for like)
       if (loop.author?._id.toString() !== userId) {
         try {
           const existingNotification = await Notification.findOne({
@@ -121,6 +143,7 @@ export const like = async (req, res) => {
           console.error("Notification error:", notifErr);
         }
       }
+      // 
     }
 
     await loop.save();
@@ -142,6 +165,7 @@ export const like = async (req, res) => {
       .json({ message: `Like loop error: ${error.message}` });
   }
 };
+
 
 // comment on loop (with notification)
 export const comment = async (req, res) => {
@@ -166,8 +190,7 @@ export const comment = async (req, res) => {
       author: req.userId,
       message: message.trim(),
     });
-
-    // notify only if not self-comment
+    // Realtime notification for comment
     if (loop.author._id.toString() !== req.userId.toString()) {
       const notification = await Notification.create({
         sender: req.userId,
@@ -177,9 +200,7 @@ export const comment = async (req, res) => {
         message: "commented on your loop",
       });
 
-      const populatedNotification = await Notification.findById(
-        notification._id
-      )
+      const populatedNotification = await Notification.findById(notification._id)
         .populate("sender", "name userName profileImage")
         .populate("receiver", "name userName profileImage")
         .populate("loop", "caption media");
@@ -191,9 +212,11 @@ export const comment = async (req, res) => {
       }
     }
 
+
     await loop.save();
     await loop.populate("author", "name userName profileImage");
     await loop.populate("comments.author", "name userName profileImage");
+    await loop.populate("comments.replies.author", "name userName profileImage");
 
     io.emit("commentedLoop", {
       loopId: loop._id,
@@ -209,7 +232,9 @@ export const comment = async (req, res) => {
   }
 };
 
+
 // Reply to Comment
+
 export const replyToComment = async (req, res) => {
   try {
     const { loopId, commentId } = req.params;
@@ -230,10 +255,33 @@ export const replyToComment = async (req, res) => {
     if (!comment) return res.status(404).json({ message: "Comment not found" });
 
     // Add reply
-    comment.replies.push({ author: req.userId, message });
+    comment.replies.push({ author: req.userId, message: message.trim() });
 
-    // Send notification if not self-reply
-    if (loop.author._id.toString() !== req.userId.toString()) {
+    // Notify comment author if not self-reply
+    if (comment.author.toString() !== req.userId.toString()) {
+      const notification = await Notification.create({
+        sender: req.userId,
+        receiver: comment.author,
+        type: "reply",
+        loop: loop._id,
+        message: "replied to your comment",
+      });
+
+      const populatedNotification = await Notification.findById(notification._id)
+        .populate("sender", "name userName profileImage")
+        .populate("receiver", "name userName profileImage")
+        .populate("loop", "caption media");
+
+      const receiverSocketId = getSocketId(comment.author.toString());
+      if (receiverSocketId) {
+        io.to(receiverSocketId).emit("newNotification", populatedNotification);
+      }
+    }
+
+    if (
+      loop.author._id.toString() !== req.userId.toString() &&
+      loop.author._id.toString() !== comment.author.toString()
+    ) {
       const notification = await Notification.create({
         sender: req.userId,
         receiver: loop.author._id,
@@ -272,7 +320,6 @@ export const replyToComment = async (req, res) => {
   }
 };
 
-
 // Delete Comment
 export const deleteComment = async (req, res) => {
   try {
@@ -295,8 +342,10 @@ export const deleteComment = async (req, res) => {
     comment.deleteOne();
     await loop.save();
     await loop.populate("comments.author", "name userName profileImage");
-    await loop.populate("comments.replies.author", "name userName profileImage");
-
+    await loop.populate(
+      "comments.replies.author",
+      "name userName profileImage"
+    );
 
     io.emit("deletedLoopComment", { loopId: loop._id, commentId });
 
@@ -332,7 +381,10 @@ export const deleteReply = async (req, res) => {
     reply.deleteOne();
     await loop.save();
     await loop.populate("comments.author", "name userName profileImage");
-    await loop.populate("comments.replies.author", "name userName profileImage");
+    await loop.populate(
+      "comments.replies.author",
+      "name userName profileImage"
+    );
 
     io.emit("deletedLoopReply", { loopId: loop._id, commentId, replyId });
 

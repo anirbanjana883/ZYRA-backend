@@ -26,6 +26,33 @@ export const uploadPost = async (req, res) => {
       "name userName profileImage"
     );
 
+     //  (Realtime notification to followers) 
+    const user = await User.findById(req.userId).populate("followers", "_id");
+
+    for (const follower of user.followers) {
+      const notification = await Notification.create({
+        sender: req.userId,
+        receiver: follower._id,
+        type: "newPost",
+        post: post._id,
+        message: "uploaded a new post",
+      });
+
+      const populatedNotification = await Notification.findById(notification._id)
+        .populate("sender", "name userName profileImage")
+        .populate("receiver", "name userName profileImage")
+        .populate("post", "caption media mediaType");
+
+      const receiverSocketId = getSocketId(follower._id.toString());
+      if (receiverSocketId) {
+        io.to(receiverSocketId).emit("newNotification", populatedNotification);
+      }
+    }
+    // 
+
+    io.emit("newPost", post);
+
+
     return res.status(201).json(populatedPost);
   } catch (err) {
     console.error("Error in uploadPost:", err);
@@ -49,7 +76,6 @@ export const getAllPosts = async (req, res) => {
       .json({ message: `Get all posts error: ${error.message}` });
   }
 };
-
 
 // Like/Unlike Post
 export const like = async (req, res) => {
@@ -75,6 +101,7 @@ export const like = async (req, res) => {
           sender: userId,
           receiver: post.author._id,
           type: "like",
+
           post: post._id,
         });
 
@@ -107,10 +134,11 @@ export const like = async (req, res) => {
     }
 
     await post.save();
+    
     await post.populate([
       { path: "author", select: "name userName profileImage" },
       { path: "comments.author", select: "name userName profileImage" },
-      { path: "comments.replies.author", select: "name userName profileImage" }, // ⭐ UPDATED
+      { path: "comments.replies.author", select: "name userName profileImage" }, 
     ]);
 
     io.emit("likedPost", {
@@ -137,6 +165,7 @@ export const comment = async (req, res) => {
     if (!message) {
       return res.status(400).json({ message: "Comment message is required" });
     }
+    
 
     const post = await Post.findById(postId).populate("author");
     if (!post) {
@@ -145,10 +174,10 @@ export const comment = async (req, res) => {
 
     post.comments.push({
       author: req.userId,
-      message,
+      message: message.trim(),
     });
 
-    //  notification only if not self-comment
+    // (Realtime notification for comment) 
     if (post.author._id.toString() !== req.userId.toString()) {
       const notification = await Notification.create({
         sender: req.userId,
@@ -164,11 +193,11 @@ export const comment = async (req, res) => {
         .populate("post", "caption media mediaType");
 
       const receiverSocketId = getSocketId(post.author._id.toString());
-
       if (receiverSocketId) {
         io.to(receiverSocketId).emit("newNotification", populatedNotification);
       }
     }
+    // 
 
     await post.save();
     await post.populate([
@@ -240,8 +269,7 @@ export const savedPosts = async (req, res) => {
   }
 };
 
-
-// ⭐ Reply to a Comment
+//  Reply to a Comment
 export const replyToComment = async (req, res) => {
   try {
     const { postId, commentId } = req.params;
@@ -259,8 +287,49 @@ export const replyToComment = async (req, res) => {
 
     comment.replies.push({
       author: req.userId,
-      message,
+      message: message.trim(),
     });
+
+    // (Realtime notification for reply) 
+    const notificationsToSend = [];
+
+    if (comment.author.toString() !== req.userId.toString()) {
+      notificationsToSend.push({
+        sender: req.userId,
+        receiver: comment.author,
+        type: "reply",
+        post: post._id,
+        message: "replied to your comment",
+      });
+    }
+
+    if (
+      post.author._id.toString() !== req.userId.toString() &&
+      post.author._id.toString() !== comment.author.toString()
+    ) {
+      notificationsToSend.push({
+        sender: req.userId,
+        receiver: post.author._id,
+        type: "reply",
+        post: post._id,
+        message: "replied to a comment on your post",
+      });
+    }
+
+    for (const notif of notificationsToSend) {
+      const notification = await Notification.create(notif);
+
+      const populatedNotification = await Notification.findById(notification._id)
+        .populate("sender", "name userName profileImage")
+        .populate("receiver", "name userName profileImage")
+        .populate("post", "caption media mediaType");
+
+      const receiverSocketId = getSocketId(notif.receiver.toString());
+      if (receiverSocketId) {
+        io.to(receiverSocketId).emit("newNotification", populatedNotification);
+      }
+    }
+    //
 
     await post.save();
     await post.populate([
@@ -280,7 +349,7 @@ export const replyToComment = async (req, res) => {
   }
 };
 
-// ⭐ Delete Comment
+//  Delete Comment
 export const deleteComment = async (req, res) => {
   try {
     const { postId, commentId } = req.params;
@@ -299,10 +368,15 @@ export const deleteComment = async (req, res) => {
       return res.status(403).json({ message: "Not authorized" });
     }
 
+    //  Delete notifications related to this comment
+    await Notification.deleteMany({ post: post._id, type: "comment" });
+     io.emit("deletedNotifications", { postId: post._id.toString(), type: "comment" });
+
+
     comment.deleteOne(); // remove comment
     await post.save();
 
-    // 🔥 Re-fetch with population so frontend always gets full post data
+    //  Re-fetch with population so frontend always gets full post data
     const updatedPost = await Post.findById(postId)
       .populate("author", "userName profileImage")
       .populate("comments.author", "userName profileImage")
@@ -310,14 +384,13 @@ export const deleteComment = async (req, res) => {
 
     io.emit("deletedComment", { postId: post._id, commentId });
 
-    res.status(200).json(updatedPost); // ✅ send updated post
+    res.status(200).json(updatedPost); //  send updated post
   } catch (error) {
     res.status(500).json({ message: `Delete comment error: ${error.message}` });
   }
 };
 
-
-// ⭐ Delete Reply
+//  Delete Reply
 export const deleteReply = async (req, res) => {
   try {
     const { postId, commentId, replyId } = req.params;
@@ -339,10 +412,14 @@ export const deleteReply = async (req, res) => {
       return res.status(403).json({ message: "Not authorized" });
     }
 
+    // Delete notifications related to this reply
+    await Notification.deleteMany({ post: post._id, type: "reply" });
+    io.emit("deletedNotifications", { postId: post._id.toString(), type: "reply" });
+
     reply.deleteOne();
     await post.save();
 
-    // 🔥 Re-fetch with population for safe frontend rendering
+    //  Re-fetch with population for safe frontend rendering
     const updatedPost = await Post.findById(postId)
       .populate("author", "userName profileImage")
       .populate("comments.author", "userName profileImage")
@@ -350,7 +427,7 @@ export const deleteReply = async (req, res) => {
 
     io.emit("deletedReply", { postId: post._id, commentId, replyId });
 
-    res.status(200).json(updatedPost); // ✅ send fully populated updated post
+    res.status(200).json(updatedPost); //  send fully populated updated post
   } catch (error) {
     res.status(500).json({ message: `Delete reply error: ${error.message}` });
   }
@@ -368,6 +445,10 @@ export const deletePost = async (req, res) => {
     if (post.author.toString() !== req.userId.toString()) {
       return res.status(403).json({ message: "Not authorized" });
     }
+
+    // Delete notifications related to this post
+    await Notification.deleteMany({ post: post._id });
+    io.emit("deletedNotifications", { postId: post._id.toString(), type: "post" });
 
     // Delete the post
     await post.deleteOne();

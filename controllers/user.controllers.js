@@ -2,6 +2,7 @@ import User from "../models/user.model.js";
 import uploadOnCloudinary from "../config/cloudinary.js";
 import Notification from "../models/notification.model.js";
 import { getSocket } from "../socket.js";
+import { io } from "../socket.js";
 
 
 
@@ -128,8 +129,6 @@ export const getProfile = async (req, res) => {
   }
 };
 
-
-
 export const follow = async (req, res) => {
   try {
     const currentUserId = req.userId;
@@ -153,7 +152,7 @@ export const follow = async (req, res) => {
     const isFollowing = currentUser.following.includes(targetUserId);
 
     if (isFollowing) {
-      // 🔹 Unfollow
+      //  Unfollow 
       currentUser.following = currentUser.following.filter(
         (id) => id.toString() !== targetUserId
       );
@@ -169,14 +168,14 @@ export const follow = async (req, res) => {
         message: "Unfollowed successfully",
       });
     } else {
-      //  Follow
+      // Follow 
       currentUser.following.push(targetUserId);
       targetUser.followers.push(currentUserId);
 
       await currentUser.save();
       await targetUser.save();
 
-      // Create notification (only if not following yourself)
+      // Realtime Notification
       if (currentUserId !== targetUserId) {
         const notification = await Notification.create({
           sender: currentUser._id,
@@ -185,11 +184,16 @@ export const follow = async (req, res) => {
           message: `${currentUser.name} started following you.`,
         });
 
-        const populatedNotification = await Notification.findById(notification._id)
+        const populatedNotification = await Notification.findById(
+          notification._id
+        )
           .populate("sender", "name userName profileImage")
           .populate("receiver", "name userName profileImage");
 
-        io.to(targetUserId.toString()).emit("newNotification", populatedNotification);
+        const receiverSocketId = getSocket(targetUserId.toString()); 
+        if (receiverSocketId) {
+          io.to(receiverSocketId).emit("newNotification", populatedNotification);
+        }
       }
 
       return res.status(200).json({
@@ -202,7 +206,6 @@ export const follow = async (req, res) => {
   }
 };
 
-
 export const followingList = async (req, res) => {
   try {
     const result = await User.findById(req.userId) 
@@ -213,9 +216,7 @@ export const followingList = async (req, res) => {
     return res.status(500).json({ message: `Following list error: ${error.message}` });
   }
 };
-
 // fuzzy search from mongo ab atlus 
-
 export const search = async (req, res) => {
   try {
     const keyWord = req.query.keyWord;
@@ -254,8 +255,6 @@ export const search = async (req, res) => {
   }
 };
 
-
-
 export const getAllNotifications = async (req, res) => {
   try {
     const notifications = await Notification.find({
@@ -272,8 +271,6 @@ export const getAllNotifications = async (req, res) => {
     return res.status(500).json({ message: "Notification Error" });
   }
 };
-
-
 
 export const markAsRead = async (req, res) => {
   try {
@@ -298,7 +295,6 @@ export const markAsRead = async (req, res) => {
   }
 };
 
-
 export const getLastSeen = async (req, res) => {
   try {
     const { userId } = req.params;
@@ -314,3 +310,37 @@ export const getLastSeen = async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 }
+
+// Mark all notifications as read/seen
+export const markAllAsRead = async (req, res) => {
+  try {
+    await Notification.updateMany(
+      { receiver: req.userId, isRead: false },
+      { $set: { isRead: true } }
+    );
+
+    return res.status(200).json({ message: "All notifications marked as read" });
+  } catch (error) {
+    return res.status(500).json({ message: "Error marking all as read" });
+  }
+};
+
+export const deleteNotification = async (req, res) => {
+  try {
+    const { notificationId } = req.params;
+    const userId = req.userId;
+
+    const deleted = await Notification.findOneAndDelete({
+      _id: notificationId,
+      receiver: userId, 
+    });
+
+    if (!deleted) {
+      return res.status(404).json({ message: "Notification not found" });
+    }
+
+    res.json({ success: true, message: "Notification deleted" });
+  } catch (err) {
+    res.status(500).json({ message: "Error deleting notification", error: err.message });
+  }
+};

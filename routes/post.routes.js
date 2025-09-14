@@ -11,7 +11,7 @@ postRouter.get("/getAll",isAuth,getAllPosts)
 postRouter.get("/like/:postId",isAuth,like)
 postRouter.get("/saved/:postId",isAuth,savedPosts)
 postRouter.post("/comment/:postId",isAuth,comment)
-//  NEW ENDPOINTS
+
 postRouter.post("/comment/:postId/:commentId/reply", isAuth, replyToComment);
 postRouter.delete("/comment/:postId/:commentId", isAuth, deleteComment);
 postRouter.delete("/comment/:postId/:commentId/reply/:replyId", isAuth, deleteReply);
