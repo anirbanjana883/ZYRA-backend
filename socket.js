@@ -10,7 +10,10 @@ const server = http.createServer(app);
 
 io = new Server(server, {
   cors: {
-    origin: "http://localhost:5173",
+    origin: [
+        "http://localhost:5173",            
+        "https://zyra-frontend-8jjf.onrender.com"  
+    ],
     methods: ["GET", "POST"],
   },
 });
