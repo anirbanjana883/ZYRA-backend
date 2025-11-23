@@ -20,6 +20,7 @@ app.use(cors({
     origin: [
         "http://localhost:5173",            
         "https://zyra-frontend-8jjf.onrender.com"  
+    ],
     credentials : true
 }))
 app.use(express.json())
